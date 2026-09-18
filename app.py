@@ -75,6 +75,18 @@ def require_exiftool():
     return None
 
 
+def exiftool_cwd():
+    """Working directory for exiftool runs.
+
+    The bundled Windows exe needs its exiftool_files/ support folder,
+    which it looks up relative to the working directory. In frozen mode
+    both live in sys._MEIPASS; otherwise the working dir doesn't matter.
+    """
+    if getattr(sys, "frozen", False) and EXIFTOOL:
+        return os.path.dirname(EXIFTOOL)
+    return None
+
+
 def run_exiftool(*args):
     """Run exiftool, return (returncode, stdout, stderr)."""
     proc = subprocess.run(
@@ -82,6 +94,7 @@ def run_exiftool(*args):
         capture_output=True,
         text=True,
         timeout=120,
+        cwd=exiftool_cwd(),
     )
     return proc.returncode, proc.stdout, proc.stderr
 
