@@ -38,8 +38,7 @@ jobs:
             $m = [regex]::Match($html, 'Version\s+(\d+\.\d+)')
             if ($m.Success) { $ver = $m.Groups[1].Value } else { $ver = "13.59" }
           } catch { $ver = "13.59" }
-          # NOTE: use the 32-bit build - it is the canonical self-contained
-          # PAR-packed exe. The 64-bit build needs an external perl5*.dll.
+          # NOTE: the 32-bit build is the canonical Windows download.
           $url = "https://sourceforge.net/projects/exiftool/files/exiftool-${ver}_32.zip/download"
           # curl.exe is far more reliable than Invoke-WebRequest for SourceForge.
           $ok = $false
@@ -64,17 +63,30 @@ jobs:
           $exe = Get-ChildItem -Path exiftool_dl -Filter "exiftool*.exe" -Recurse |
                  Select-Object -First 1
           if (-not $exe) { throw "exiftool exe not found inside the zip" }
-          Write-Host "Found: $($exe.FullName)"
-          Move-Item $exe.FullName exiftool.exe
+          $exeDir = $exe.DirectoryName
+          Write-Host "exe dir: $exeDir"
+          Get-ChildItem -Path $exeDir | ForEach-Object { Write-Host "  $($_.Name)" }
+          # Stage exe + its support files (exiftool_files/) for PyInstaller.
+          # The exe needs exiftool_files/ visible from its working directory.
+          New-Item -ItemType Directory -Path stage -Force | Out-Null
+          Copy-Item $exe.FullName stage/exiftool.exe
+          Get-ChildItem -Path $exeDir -Exclude "exiftool*.exe" |
+            Copy-Item -Destination stage -Recurse -Force
+          Push-Location stage
           .\exiftool.exe -ver
+          Pop-Location
 
       - name: Build standalone exe
         shell: pwsh
         run: |
+          $extra = @()
+          if (Test-Path "stage/exiftool_files") {
+            $extra += "--add-data"; $extra += "stage/exiftool_files;exiftool_files"
+          }
           pyinstaller --onefile --noconfirm --name exiftool-web `
             --add-data "templates;templates" `
-            --add-binary "exiftool.exe;." `
-            app.py
+            --add-binary "stage/exiftool.exe;." `
+            @extra app.py
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
