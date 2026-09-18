@@ -64,6 +64,8 @@ EDITABLE_FIELDS = [
     ("copyright", "EXIF:Copyright", "text", "Copyright notice"),
     ("keywords", "IPTC:Keywords", "text", "Keywords (comma separated)"),
     ("date_taken", "EXIF:DateTimeOriginal", "datetime-local", "Date taken"),
+    ("latitude", "EXIF:GPSLatitude", "text", "Latitude"),
+    ("longitude", "EXIF:GPSLongitude", "text", "Longitude"),
 ]
 
 
@@ -171,6 +173,18 @@ def update():
             args.append(f"-{tag}=")
             for kw in [k.strip() for k in value.split(",") if k.strip()]:
                 args.append(f"-{tag}={kw}")
+        elif name in ("latitude", "longitude") and value:
+            # Decimal degrees, e.g. 41.8781 / -87.6298.
+            try:
+                num = float(value)
+            except ValueError:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+                return jsonify({"error": f"Invalid {name}: enter a number like 41.8781."}), 400
+            lo, hi = (-90, 90) if name == "latitude" else (-180, 180)
+            if not lo <= num <= hi:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+                return jsonify({"error": f"{name.capitalize()} must be between {lo} and {hi}."}), 400
+            args.append(f"-{tag}={value}")
         elif name == "date_taken" and value:
             # datetime-local -> "YYYY:MM:DD HH:MM:SS"
             value = value.replace("T", " ").replace("-", ":")
