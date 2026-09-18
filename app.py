@@ -32,6 +32,13 @@ from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request, send_file
 
+try:
+    from version import APP_VERSION
+except ImportError:
+    APP_VERSION = "dev"
+
+RELEASES_URL = "https://github.com/kappytappy/exiftool-web/releases"
+
 
 def resource_path(rel):
     """Absolute path to a bundled resource (dev and PyInstaller-frozen)."""
@@ -117,7 +124,8 @@ def index():
 
 @app.route("/api/health")
 def health():
-    return jsonify({"exiftool": bool(EXIFTOOL), "version": exiftool_version()})
+    return jsonify({"exiftool": bool(EXIFTOOL), "version": exiftool_version(),
+                    "app_version": APP_VERSION, "releases_url": RELEASES_URL})
 
 
 def exiftool_version():

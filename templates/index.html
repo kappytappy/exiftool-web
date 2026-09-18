@@ -140,6 +140,7 @@
   button:active{transform:scale(.98)}
   button.ghost{background:transparent; color:var(--text); border:1px solid var(--border); font-weight:600}
   button.ghost:hover{border-color:var(--accent)}
+  button.small{padding:6px 13px; font-size:12.5px; border-radius:999px; flex:0 0 auto}
   button.danger{background:transparent; color:var(--danger); border:1px solid #5a2b2b; font-weight:600}
   button.danger:hover{border-color:var(--danger); background:rgba(255,128,128,.06)}
   button:disabled{opacity:.5; cursor:default; transform:none}
@@ -166,6 +167,7 @@
   <div class="brand">ExifTool Web UI</div>
   <div class="tagline">photo metadata, on your machine</div>
   <div id="ver" class="hidden"></div>
+  <button class="ghost small hidden" id="updateBtn">Check for updates</button>
 </header>
 
 <div id="toast" class="hidden"></div>
@@ -457,13 +459,16 @@ $("taglist").addEventListener("click", e => {
 
 // Health check on load.
 fetch("/api/health").then(r => r.json()).then(h => {
-  if (h.exiftool) {
-    const v = $("ver");
-    v.textContent = "ExifTool " + h.version;
-    v.classList.remove("hidden");
-  } else {
-    toast("ExifTool was not found on this computer.", "err");
+  const v = $("ver");
+  v.textContent = h.app_version || "dev";
+  v.title = h.exiftool ? ("ExifTool " + h.version) : "ExifTool not found";
+  v.classList.remove("hidden");
+  if (h.releases_url) {
+    const b = $("updateBtn");
+    b.classList.remove("hidden");
+    b.addEventListener("click", () => window.open(h.releases_url, "_blank"));
   }
+  if (!h.exiftool) toast("ExifTool was not found on this computer.", "err");
 });
 </script>
 </body>

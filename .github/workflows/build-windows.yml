@@ -76,6 +76,12 @@ jobs:
           .\exiftool.exe -ver
           Pop-Location
 
+      - name: Stamp app version
+        shell: pwsh
+        run: |
+          "APP_VERSION = `"v1.0.${{ github.run_number }}`"" | Out-File -Encoding utf8 version.py
+          Get-Content version.py
+
       - name: Build standalone exe
         shell: pwsh
         run: |
