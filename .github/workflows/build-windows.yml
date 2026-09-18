@@ -59,7 +59,11 @@ jobs:
           }
           if (-not $ok) { throw "ExifTool download failed after 5 attempts" }
           Expand-Archive exiftool.zip -DestinationPath exiftool_dl -Force
-          Move-Item "exiftool_dl/exiftool(-k).exe" exiftool.exe
+          $exe = Get-ChildItem -Path exiftool_dl -Filter "exiftool*.exe" -Recurse |
+                 Select-Object -First 1
+          if (-not $exe) { throw "exiftool exe not found inside the zip" }
+          Write-Host "Found: $($exe.FullName)"
+          Move-Item $exe.FullName exiftool.exe
           .\exiftool.exe -ver
 
       - name: Build standalone exe
