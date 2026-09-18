@@ -1,0 +1,68 @@
+name: Build Windows exe
+
+# Produces a single double-clickable exiftool-web.exe (Python + app +
+# ExifTool bundled) and publishes it on the Releases page.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app.py"
+      - "requirements.txt"
+      - "templates/**"
+      - ".github/workflows/build-windows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Download ExifTool
+        shell: pwsh
+        run: |
+          try {
+            $html = (Invoke-WebRequest -Uri "https://exiftool.org/" -UseBasicParsing).Content
+            $m = [regex]::Match($html, 'Version\s+(\d+\.\d+)')
+            if ($m.Success) { $ver = $m.Groups[1].Value } else { $ver = "13.59" }
+          } catch { $ver = "13.59" }
+          $url = "https://sourceforge.net/projects/exiftool/files/exiftool-${ver}_64.zip/download"
+          Write-Host "Downloading ExifTool $ver ..."
+          Invoke-WebRequest -Uri $url -OutFile exiftool.zip
+          Expand-Archive exiftool.zip -DestinationPath exiftool_dl
+          Move-Item "exiftool_dl/exiftool(-k).exe" exiftool.exe
+          .\exiftool.exe -ver
+
+      - name: Build standalone exe
+        shell: pwsh
+        run: |
+          pyinstaller --onefile --noconfirm --name exiftool-web `
+            --add-data "templates;templates" `
+            --add-binary "exiftool.exe;." `
+            app.py
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: ExifTool Web UI v1.0.${{ github.run_number }}
+          body: |
+            Download `exiftool-web.exe` below, double-click it - no Python or
+            ExifTool install needed. Your browser opens automatically at
+            http://127.0.0.1:5000. Close the black window to stop the app.
+
+            Note: Windows SmartScreen may warn that the app is unrecognized
+            (it isn't code-signed). Click "More info" -> "Run anyway".
+          files: dist/exiftool-web.exe
