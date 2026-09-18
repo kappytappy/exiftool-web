@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ExifTool Web UI</title>
+<style>
+  :root { --bg:#14161a; --panel:#1d2026; --border:#2c313a; --text:#e8eaed;
+          --muted:#9aa0a6; --accent:#7ab8ff; --danger:#ff7a7a; --ok:#7bff9e; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:15px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  header { padding:18px 24px; border-bottom:1px solid var(--border); }
+  header h1 { margin:0; font-size:20px; }
+  header p { margin:4px 0 0; color:var(--muted); font-size:13px; }
+  main { max-width:1000px; margin:0 auto; padding:24px; }
+  #drop { border:2px dashed var(--border); border-radius:12px; padding:48px 24px;
+          text-align:center; color:var(--muted); cursor:pointer; background:var(--panel); }
+  #drop:hover, #drop.over { border-color:var(--accent); color:var(--text); }
+  #drop input { display:none; }
+  .hidden { display:none !important; }
+  #status { margin:16px 0; padding:10px 14px; border-radius:8px; font-size:14px; }
+  #status.ok { background:#12351f; color:var(--ok); }
+  #status.err { background:#3a1515; color:var(--danger); }
+  #status.info { background:#16283f; color:var(--accent); }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:12px;
+          padding:20px; margin-top:20px; }
+  .card h2 { margin:0 0 12px; font-size:17px; }
+  #filebar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  #filebar .name { font-weight:600; }
+  #filebar .meta { color:var(--muted); font-size:13px; }
+  #filebar button { margin-left:auto; }
+  button { background:var(--accent); color:#0b1526; border:0; border-radius:8px;
+           padding:10px 18px; font-size:14px; font-weight:600; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--text); border:1px solid var(--border); }
+  button.danger { background:var(--danger); color:#2b0b0b; }
+  button:disabled { opacity:.5; cursor:default; }
+  #search { width:100%; padding:10px 12px; border-radius:8px; border:1px solid var(--border);
+            background:var(--bg); color:var(--text); font-size:14px; margin-bottom:12px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--border);
+           vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  td.tag { font-family:ui-monospace, Menlo, monospace; color:var(--accent);
+           white-space:nowrap; }
+  td.val { word-break:break-word; }
+  .grid { display:grid; grid-template-columns:160px 1fr; gap:12px 16px; align-items:center; }
+  .grid label { color:var(--muted); font-size:14px; }
+  .grid input { padding:10px 12px; border-radius:8px; border:1px solid var(--border);
+                background:var(--bg); color:var(--text); font-size:14px; width:100%; }
+  .actions { display:flex; gap:12px; margin-top:18px; flex-wrap:wrap; }
+  footer { text-align:center; color:var(--muted); font-size:12px; padding:24px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ExifTool Web UI</h1>
+  <p>Read, edit, and strip file metadata — powered by ExifTool, running on your computer.</p>
+</header>
+<main>
+  <div id="drop">
+    <input type="file" id="fileinput">
+    <div><strong>Drop a photo or file here</strong><br>or click to choose one</div>
+  </div>
+
+  <div id="status" class="hidden"></div>
+
+  <div id="filebar" class="card hidden">
+    <span class="name" id="filename"></span>
+    <span class="meta" id="filemeta"></span>
+    <button class="ghost" id="newfile">Choose a different file</button>
+  </div>
+
+  <div id="editcard" class="card hidden">
+    <h2>Edit metadata</h2>
+    <div class="grid">
+      <label for="f_title">Title</label><input id="f_title" data-field="title" placeholder="Title">
+      <label for="f_description">Description</label><input id="f_description" data-field="description" placeholder="Description / caption">
+      <label for="f_author">Author</label><input id="f_author" data-field="author" placeholder="Author / artist">
+      <label for="f_copyright">Copyright</label><input id="f_copyright" data-field="copyright" placeholder="Copyright notice">
+      <label for="f_keywords">Keywords</label><input id="f_keywords" data-field="keywords" placeholder="Keywords (comma separated)">
+      <label for="f_date_taken">Date taken</label><input id="f_date_taken" data-field="date_taken" type="datetime-local">
+    </div>
+    <div class="actions">
+      <button id="save">Save changes &amp; download</button>
+      <button id="strip" class="danger">Remove ALL metadata &amp; download</button>
+    </div>
+  </div>
+
+  <div id="metacard" class="card hidden">
+    <h2>All metadata <span id="tagcount" style="color:var(--muted);font-weight:400"></span></h2>
+    <input id="search" placeholder="Filter tags… (e.g. gps, copyright, date)">
+    <table>
+      <thead><tr><th>Tag</th><th>Value</th></tr></thead>
+      <tbody id="tagrows"></tbody>
+    </table>
+  </div>
+</main>
+<footer>Runs entirely on your machine. Files never leave your computer.</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+let currentFile = null;
+let allTags = {};
+
+// Map friendly edit fields -> exiftool grouped tag names we look for when prefilling.
+const PREFILL = {
+  title:       ["XMP:Title", "IPTC:ObjectName"],
+  description: ["EXIF:ImageDescription", "XMP:Description", "IPTC:Caption-Abstract"],
+  author:      ["EXIF:Artist", "XMP:Creator", "IPTC:By-line"],
+  copyright:   ["EXIF:Copyright", "XMP:Rights", "IPTC:CopyrightNotice"],
+  keywords:    ["IPTC:Keywords", "XMP:Subject"],
+  date_taken:  ["EXIF:DateTimeOriginal", "EXIF:CreateDate"],
+};
+
+function status(msg, kind) {
+  const el = $("status");
+  el.textContent = msg;
+  el.className = kind || "";
+  el.classList.remove("hidden");
+}
+
+function setBusy(b) {
+  ["save","strip"].forEach(id => $(id).disabled = b);
+}
+
+async function loadFile(file) {
+  currentFile = file;
+  setBusy(true);
+  status("Reading metadata…", "info");
+  const fd = new FormData();
+  fd.append("file", file);
+  try {
+    const res = await fetch("/api/metadata", { method: "POST", body: fd });
+    const data = await res.json();
+    if (data.error) { status(data.error, "err"); return; }
+    allTags = data.tags;
+    $("filename").textContent = file.name;
+    $("filemeta").textContent = `${data.count} tags · ${(file.size/1024).toFixed(1)} KB`;
+    $("tagcount").textContent = `(${data.count})`;
+    renderTags("");
+    prefillForm();
+    ["filebar","editcard","metacard"].forEach(id => $(id).classList.remove("hidden"));
+    status(`Loaded ${data.count} metadata tags.`, "ok");
+  } catch (e) {
+    status("Could not reach the server. Is app.py running?", "err");
+  } finally {
+    setBusy(false);
+  }
+}
+
+function renderTags(filter) {
+  const q = filter.toLowerCase();
+  const rows = Object.entries(allTags)
+    .filter(([tag, val]) => !q || tag.toLowerCase().includes(q) || String(val).toLowerCase().includes(q))
+    .sort(([a],[b]) => a.localeCompare(b));
+  $("tagrows").innerHTML = rows.map(([tag, val]) =>
+    `<tr><td class="tag">${escapeHtml(tag)}</td><td class="val">${escapeHtml(String(val))}</td></tr>`
+  ).join("") || `<tr><td colspan="2" style="color:var(--muted)">No matching tags.</td></tr>`;
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function prefillForm() {
+  document.querySelectorAll("[data-field]").forEach(input => {
+    const field = input.dataset.field;
+    input.value = "";
+    for (const tag of (PREFILL[field] || [])) {
+      if (allTags[tag] !== undefined && allTags[tag] !== "") {
+        let v = String(allTags[tag]);
+        if (field === "date_taken") {
+          // "2021:06:19 17:33:20" -> "2021-06-19T17:33"
+          const m = v.match(/(\d{4}):(\d{2}):(\d{2})[ ](\d{2}):(\d{2})/);
+          if (m) v = `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}`;
+          else { input.value = ""; break; }
+        }
+        input.value = v;
+        break;
+      }
+    }
+  });
+}
+
+function collectFields() {
+  const fields = {};
+  document.querySelectorAll("[data-field]").forEach(input => {
+    fields[input.dataset.field] = input.value;
+  });
+  return fields;
+}
+
+async function postAndDownload(endpoint, extraForm) {
+  if (!currentFile) return;
+  setBusy(true);
+  status("Working…", "info");
+  const fd = new FormData();
+  fd.append("file", currentFile);
+  if (extraForm) for (const [k, v] of Object.entries(extraForm)) fd.append(k, v);
+  try {
+    const res = await fetch(endpoint, { method: "POST", body: fd });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      status(data.error || "Something went wrong.", "err");
+      return;
+    }
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = currentFile.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    status("Done — your file has been downloaded.", "ok");
+    // Refresh the metadata view from the downloaded result.
+    loadFile(new File([blob], currentFile.name, { type: currentFile.type }));
+  } catch (e) {
+    status("Could not reach the server.", "err");
+  } finally {
+    setBusy(false);
+  }
+}
+
+// --- wiring ---
+const drop = $("drop"), fileinput = $("fileinput");
+drop.addEventListener("click", () => fileinput.click());
+fileinput.addEventListener("change", e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+["dragover","dragenter"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) loadFile(f); });
+$("search").addEventListener("input", e => renderTags(e.target.value));
+$("newfile").addEventListener("click", () => fileinput.click());
+$("save").addEventListener("click", () =>
+  postAndDownload("/api/update", { fields: JSON.stringify(collectFields()) }));
+$("strip").addEventListener("click", () => {
+  if (confirm("Remove ALL metadata from this file? This cannot be undone."))
+    postAndDownload("/api/strip");
+});
+
+// Health check on load.
+fetch("/api/health").then(r => r.json()).then(h => {
+  if (!h.exiftool) status("ExifTool was not found on this computer. Install it, then restart app.py.", "err");
+});
+</script>
+</body>
+</html>
