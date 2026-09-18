@@ -39,9 +39,26 @@ jobs:
             if ($m.Success) { $ver = $m.Groups[1].Value } else { $ver = "13.59" }
           } catch { $ver = "13.59" }
           $url = "https://sourceforge.net/projects/exiftool/files/exiftool-${ver}_64.zip/download"
-          Write-Host "Downloading ExifTool $ver ..."
-          Invoke-WebRequest -Uri $url -OutFile exiftool.zip
-          Expand-Archive exiftool.zip -DestinationPath exiftool_dl
+          # curl.exe is far more reliable than Invoke-WebRequest for SourceForge.
+          $ok = $false
+          for ($i = 1; $i -le 5 -and -not $ok; $i++) {
+            Write-Host "Download attempt $i of 5 ..."
+            Remove-Item exiftool.zip -ErrorAction SilentlyContinue
+            curl.exe -sSL --retry 3 --retry-all-errors --max-time 300 -o exiftool.zip $url
+            try {
+              Add-Type -AssemblyName System.IO.Compression.FileSystem
+              $z = [System.IO.Compression.ZipFile]::OpenRead("$PWD/exiftool.zip")
+              $names = @($z.Entries | ForEach-Object { $_.Name })
+              $z.Dispose()
+              $ok = $names -contains "exiftool(-k).exe"
+              if (-not $ok) { Write-Host "zip downloaded but exe entry missing" }
+            } catch {
+              Write-Host "zip validation failed, retrying..."
+              Start-Sleep 5
+            }
+          }
+          if (-not $ok) { throw "ExifTool download failed after 5 attempts" }
+          Expand-Archive exiftool.zip -DestinationPath exiftool_dl -Force
           Move-Item "exiftool_dl/exiftool(-k).exe" exiftool.exe
           .\exiftool.exe -ver
 
