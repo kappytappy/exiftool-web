@@ -170,6 +170,7 @@ def update():
 
     tmpdir, filepath = save_upload(request.files["file"])
     args = ["-overwrite_original"]
+    gps_refs = []  # N/S/E/W refs must come after ALL coordinate tags (exiftool ordering quirk)
     tag_map = {name: tag for name, tag, _, _ in EDITABLE_FIELDS}
     for name, value in fields.items():
         tag = tag_map.get(name)
@@ -181,18 +182,29 @@ def update():
             args.append(f"-{tag}=")
             for kw in [k.strip() for k in value.split(",") if k.strip()]:
                 args.append(f"-{tag}={kw}")
-        elif name in ("latitude", "longitude") and value:
-            # Decimal degrees, e.g. 41.8781 / -87.6298.
+        elif name in ("latitude", "longitude"):
+            # Decimal degrees, e.g. 41.8781 / -87.6298. ExifTool silently
+            # drops the sign of negative decimals, so write the unsigned
+            # coordinate plus an explicit N/S/E/W ref tag.
+            is_lat = name == "latitude"
+            coord_tag = "EXIF:GPSLatitude" if is_lat else "EXIF:GPSLongitude"
+            ref_tag = "EXIF:GPSLatitudeRef" if is_lat else "EXIF:GPSLongitudeRef"
+            if not value:
+                args.append(f"-{coord_tag}=")
+                args.append(f"-{ref_tag}=")
+                continue
             try:
                 num = float(value)
             except ValueError:
                 shutil.rmtree(tmpdir, ignore_errors=True)
                 return jsonify({"error": f"Invalid {name}: enter a number like 41.8781."}), 400
-            lo, hi = (-90, 90) if name == "latitude" else (-180, 180)
+            lo, hi = (-90, 90) if is_lat else (-180, 180)
             if not lo <= num <= hi:
                 shutil.rmtree(tmpdir, ignore_errors=True)
                 return jsonify({"error": f"{name.capitalize()} must be between {lo} and {hi}."}), 400
-            args.append(f"-{tag}={value}")
+            args.append(f"-{coord_tag}={abs(num)}")
+            hemi = ("N" if num >= 0 else "S") if is_lat else ("E" if num >= 0 else "W")
+            gps_refs.append(f"-{ref_tag}={hemi}")
         elif name == "date_taken" and value:
             # datetime-local -> "YYYY:MM:DD HH:MM:SS"
             value = value.replace("T", " ").replace("-", ":")
@@ -201,6 +213,7 @@ def update():
             args.append(f"-{tag}={value}")
         else:
             args.append(f"-{tag}={value}")
+    args.extend(gps_refs)
     args.append(filepath)
     rc, _, serr = run_exiftool(*args)
     if rc != 0:
