@@ -14,22 +14,47 @@ Requires the `exiftool` command-line tool to be installed and on your PATH:
   - macOS:   brew install exiftool
   - Windows: download from https://exiftool.org and add it to PATH
   - Linux:   sudo apt install libimage-exiftool-perl
+
+Or grab the standalone Windows .exe from the GitHub Releases page -
+it bundles Python, this app, and ExifTool: just double-click it.
 """
 
 import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
+import threading
+import time
+import webbrowser
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request, send_file
 
-app = Flask(__name__)
+
+def resource_path(rel):
+    """Absolute path to a bundled resource (dev and PyInstaller-frozen)."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, rel)
+
+
+app = Flask(__name__, template_folder=resource_path("templates"))
 # Refuse uploads larger than 200 MB.
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
 
-EXIFTOOL = shutil.which("exiftool")
+
+def find_exiftool():
+    # Bundled exe (PyInstaller --add-binary "exiftool.exe;.") takes priority.
+    if getattr(sys, "frozen", False):
+        bundled = os.path.join(sys._MEIPASS, "exiftool.exe")
+        if os.path.isfile(bundled):
+            return bundled
+    # Otherwise rely on PATH (manual installs).
+    return shutil.which("exiftool")
+
+
+EXIFTOOL = find_exiftool()
 
 # Friendly field name -> (exiftool tag, input type, placeholder)
 EDITABLE_FIELDS = [
@@ -154,8 +179,6 @@ def update():
 
 def delete_later(tmpdir, delay=30):
     """Remove a temp dir after the response has (presumably) been sent."""
-    import threading
-    import time
 
     def _delete():
         time.sleep(delay)
@@ -185,5 +208,10 @@ def strip():
 
 
 if __name__ == "__main__":
+    if getattr(sys, "frozen", False):
+        # Double-clicked standalone exe: open the browser automatically.
+        threading.Timer(
+            1.5, lambda: webbrowser.open("http://127.0.0.1:5000")
+        ).start()
     # Localhost only by default - this is a personal tool, not a public server.
     app.run(host="127.0.0.1", port=5000, debug=False)
