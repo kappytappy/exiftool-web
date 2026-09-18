@@ -150,7 +150,16 @@ def metadata():
         data = json.loads(out)[0]
         # Drop the SourceFile entry; keep everything else grouped like "EXIF:Tag".
         data.pop("SourceFile", None)
-        return jsonify({"tags": data, "count": len(data)})
+        # Split off exiftool's own pseudo-tags (never embedded in the file):
+        # ExifTool:* = the tool's own version, File:* = filesystem details,
+        # Composite:* = computed values. Shown only via the "file details" toggle.
+        SYSTEM_GROUPS = ("ExifTool", "File", "Composite")
+        tags, system_tags = {}, {}
+        for k, v in data.items():
+            grp = k.split(":")[0] if ":" in k else ""
+            (system_tags if grp in SYSTEM_GROUPS else tags)[k] = v
+        return jsonify({"tags": tags, "system_tags": system_tags,
+                        "count": len(tags), "system_count": len(system_tags)})
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 

@@ -105,6 +105,9 @@
   .topline{display:flex; align-items:center; gap:10px; margin-bottom:10px}
   .topline h2{margin:0}
   #tagcount{margin-left:auto; color:var(--muted); font-size:12.5px; white-space:nowrap; text-transform:none; letter-spacing:0}
+  .sys-toggle{display:flex; align-items:center; gap:5px; font-size:12px; color:var(--muted);
+    cursor:pointer; white-space:nowrap; font-weight:400}
+  .sys-toggle input{accent-color:var(--accent); cursor:pointer; margin:0}
   #tabs{display:flex; gap:8px; overflow-x:auto; padding-bottom:2px; scrollbar-width:thin}
 
   .trow{
@@ -200,7 +203,7 @@
     <div id="boxes">
       <div class="box">
         <div class="boxhead">
-          <div class="topline"><h2>All metadata</h2><span id="tagcount"></span></div>
+          <div class="topline"><h2>All metadata</h2><span id="tagcount"></span><label class="sys-toggle" title="Show ExifTool version, file info and computed values"><input type="checkbox" id="sysToggle"> details</label></div>
           <input id="search" placeholder="Filter tags… (e.g. gps, copyright, date)">
           <div id="tabs"></div>
         </div>
@@ -236,6 +239,8 @@
 const $ = id => document.getElementById(id);
 let currentFile = null;
 let allTags = {};
+let systemTags = {};
+let showSystem = false;
 let groups = {};
 let activeTab = "All";
 let renderedRows = [];
@@ -267,7 +272,10 @@ function setBusy(b) {
 
 function buildGroups() {
   groups = {};
-  for (const [tag, val] of Object.entries(allTags)) {
+  // By default show only truly embedded metadata; the "details" toggle
+  // adds exiftool's own pseudo-tags (ExifTool/File/Composite groups).
+  const pool = showSystem ? Object.assign({}, allTags, systemTags) : allTags;
+  for (const [tag, val] of Object.entries(pool)) {
     const g = tag.includes(":") ? tag.slice(0, tag.indexOf(":")) : "Other";
     (groups[g] = groups[g] || []).push([tag, val]);
   }
@@ -300,13 +308,20 @@ function renderTags(filter) {
   entries = entries.filter(([tag, val]) =>
     !q || tag.toLowerCase().includes(q) || String(val).toLowerCase().includes(q));
   renderedRows = entries;
-  $("tagcount").textContent = `${entries.length} of ${Object.keys(allTags).length} tags`;
+  const total = Object.keys(allTags).length;
+  const sysTotal = Object.keys(systemTags).length;
+  $("tagcount").textContent = (showSystem && sysTotal)
+    ? `${entries.length} shown · ${total} embedded`
+    : `${entries.length} of ${total} tags`;
+  const emptyMsg = (!showSystem && total === 0)
+    ? "No embedded metadata — this file is clean ✓"
+    : "No matching tags.";
   $("taglist").innerHTML = entries.length ? entries.map(([tag, val], i) => {
     const v = String(val);
     return `<div class="trow" data-i="${i}" title="Click to copy">` +
       `<div class="k">${tagKeyHTML(tag)}</div>` +
       `<div class="v${v ? "" : " empty"}">${v ? escapeHtml(v) : "—"}</div></div>`;
-  }).join("") : `<div class="none">No matching tags.</div>`;
+  }).join("") : `<div class="none">${emptyMsg}</div>`;
 }
 
 function escapeHtml(s) {
@@ -374,6 +389,7 @@ async function loadFile(file) {
     const data = await res.json();
     if (data.error) { toast(data.error, "err"); return; }
     allTags = data.tags;
+    systemTags = data.system_tags || {};
     activeTab = "All";
     $("search").value = "";
     buildGroups();
@@ -436,6 +452,10 @@ makeDropzone($("drop"));
 makeDropzone($("dropbar"));
 fileinput.addEventListener("change", e => pickFile(e.target.files[0]));
 $("search").addEventListener("input", e => renderTags(e.target.value));
+$("sysToggle").addEventListener("change", e => {
+  showSystem = e.target.checked;
+  buildGroups(); renderTabs(); renderTags($("search").value);
+});
 $("newfile").addEventListener("click", () => fileinput.click());
 $("save").addEventListener("click", () =>
   postAndDownload("/api/update", { fields: JSON.stringify(collectFields()) }));
