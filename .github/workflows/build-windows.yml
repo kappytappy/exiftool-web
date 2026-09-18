@@ -38,7 +38,9 @@ jobs:
             $m = [regex]::Match($html, 'Version\s+(\d+\.\d+)')
             if ($m.Success) { $ver = $m.Groups[1].Value } else { $ver = "13.59" }
           } catch { $ver = "13.59" }
-          $url = "https://sourceforge.net/projects/exiftool/files/exiftool-${ver}_64.zip/download"
+          # NOTE: use the 32-bit build - it is the canonical self-contained
+          # PAR-packed exe. The 64-bit build needs an external perl5*.dll.
+          $url = "https://sourceforge.net/projects/exiftool/files/exiftool-${ver}.zip/download"
           # curl.exe is far more reliable than Invoke-WebRequest for SourceForge.
           $ok = $false
           for ($i = 1; $i -le 5 -and -not $ok; $i++) {
