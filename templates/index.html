@@ -217,6 +217,7 @@
             <div class="field"><label>Title</label><input data-field="title" placeholder="Title"></div>
             <div class="field"><label>Description</label><input data-field="description" placeholder="Description / caption"></div>
             <div class="field"><label>Author</label><input data-field="author" placeholder="Author / artist"></div>
+            <div class="field"><label>Device</label><input data-field="device" placeholder="Camera / phone it was taken with"></div>
             <div class="field"><label>Copyright</label><input data-field="copyright" placeholder="Copyright notice"></div>
             <div class="field"><label>Keywords</label><input data-field="keywords" placeholder="Comma separated"></div>
             <div class="field"><label>Date taken</label><input data-field="date_taken" type="datetime-local"></div>
@@ -227,8 +228,10 @@
           </div>
           <div class="actions">
             <button id="save">Save &amp; download</button>
+            <button id="savetopc" class="ghost" title="Save straight to your Downloads with the dates you typed stamped on the file, so right-click &#8594; Properties shows them">Save to PC &#128190;</button>
             <button id="strip" class="danger">Strip all</button>
           </div>
+          <p style="color:var(--muted); font-size:12px; margin:10px 2px 0">Save to PC drops the finished file into your Downloads with your dates stamped on it, so Windows Properties shows the date you chose. A normal download always shows today's date.</p>
         </div>
       </div>
     </div>
@@ -251,6 +254,7 @@ const PREFILL = {
   title:       ["XMP:Title", "IPTC:ObjectName"],
   description: ["EXIF:ImageDescription", "XMP:Description", "IPTC:Caption-Abstract"],
   author:      ["EXIF:Artist", "XMP:Creator", "IPTC:By-line"],
+  device:      ["EXIF:Model", "XMP-tiff:Model"],
   copyright:   ["EXIF:Copyright", "XMP:Rights", "IPTC:CopyrightNotice"],
   keywords:    ["IPTC:Keywords", "XMP:Subject"],
   date_taken:  ["EXIF:DateTimeOriginal", "EXIF:CreateDate"],
@@ -267,7 +271,7 @@ function toast(msg, kind) {
 }
 
 function setBusy(b) {
-  ["save","strip"].forEach(id => $(id).disabled = b);
+  ["save","savetopc","strip"].forEach(id => $(id).disabled = b);
 }
 
 function buildGroups() {
@@ -459,6 +463,24 @@ $("sysToggle").addEventListener("change", e => {
 $("newfile").addEventListener("click", () => fileinput.click());
 $("save").addEventListener("click", () =>
   postAndDownload("/api/update", { fields: JSON.stringify(collectFields()) }));
+$("savetopc").addEventListener("click", async () => {
+  if (!currentFile) return;
+  setBusy(true);
+  toast("Saving to your Downloads…", "info");
+  const fd = new FormData();
+  fd.append("file", currentFile);
+  fd.append("fields", JSON.stringify(collectFields()));
+  try {
+    const res = await fetch("/api/save_to_pc", { method: "POST", body: fd });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.error) { toast(data.error || "Something went wrong.", "err"); return; }
+    toast(`Saved to Downloads as ${data.filename} — Properties shows Created: ${data.created}`, "ok");
+  } catch (e) {
+    toast("Could not reach the server.", "err");
+  } finally {
+    setBusy(false);
+  }
+});
 $("strip").addEventListener("click", () => {
   if (confirm("Remove ALL metadata from this file? This cannot be undone."))
     postAndDownload("/api/strip");

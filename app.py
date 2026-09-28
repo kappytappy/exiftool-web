@@ -28,6 +28,7 @@ import tempfile
 import threading
 import time
 import webbrowser
+from datetime import datetime, timezone
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request, send_file
@@ -68,6 +69,7 @@ EDITABLE_FIELDS = [
     ("title", "XMP:Title", "text", "Title"),
     ("description", "EXIF:ImageDescription", "text", "Description / caption"),
     ("author", "EXIF:Artist", "text", "Author / artist"),
+    ("device", "EXIF:Model", "text", "Device (camera / phone model)"),
     ("copyright", "EXIF:Copyright", "text", "Copyright notice"),
     ("keywords", "IPTC:Keywords", "text", "Keywords (comma separated)"),
     ("date_taken", "EXIF:DateTimeOriginal", "datetime-local", "Date taken"),
@@ -164,20 +166,8 @@ def metadata():
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-@app.route("/api/update", methods=["POST"])
-def update():
-    """Apply edited tags and return the modified file for download."""
-    err = require_exiftool()
-    if err:
-        return err
-    if "file" not in request.files:
-        return jsonify({"error": "No file uploaded."}), 400
-    try:
-        fields = json.loads(request.form.get("fields", "{}"))
-    except json.JSONDecodeError:
-        return jsonify({"error": "Invalid fields JSON."}), 400
-
-    tmpdir, filepath = save_upload(request.files["file"])
+def build_update_args(fields):
+    """Turn the edit form into exiftool args. Returns (args, error)."""
     args = ["-overwrite_original"]
     gps_refs = []  # N/S/E/W refs must come after ALL coordinate tags (exiftool ordering quirk)
     tag_map = {name: tag for name, tag, _, _ in EDITABLE_FIELDS}
@@ -205,12 +195,10 @@ def update():
             try:
                 num = float(value)
             except ValueError:
-                shutil.rmtree(tmpdir, ignore_errors=True)
-                return jsonify({"error": f"Invalid {name}: enter a number like 41.8781."}), 400
+                return None, f"Invalid {name}: enter a number like 41.8781."
             lo, hi = (-90, 90) if is_lat else (-180, 180)
             if not lo <= num <= hi:
-                shutil.rmtree(tmpdir, ignore_errors=True)
-                return jsonify({"error": f"{name.capitalize()} must be between {lo} and {hi}."}), 400
+                return None, f"{name.capitalize()} must be between {lo} and {hi}."
             args.append(f"-{coord_tag}={abs(num)}")
             hemi = ("N" if num >= 0 else "S") if is_lat else ("E" if num >= 0 else "W")
             gps_refs.append(f"-{ref_tag}={hemi}")
@@ -223,15 +211,80 @@ def update():
         else:
             args.append(f"-{tag}={value}")
     args.extend(gps_refs)
+    return args, None
+
+
+def apply_updates(filepath, fields):
+    """Run exiftool over filepath. Returns an error string or None."""
+    args, err = build_update_args(fields)
+    if err:
+        return err
     args.append(filepath)
     rc, _, serr = run_exiftool(*args)
     if rc != 0:
+        return f"exiftool failed: {serr.strip()}"
+    return None
+
+
+@app.route("/api/update", methods=["POST"])
+def update():
+    """Apply edited tags and return the modified file for download."""
+    err = require_exiftool()
+    if err:
+        return err
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded."}), 400
+    try:
+        fields = json.loads(request.form.get("fields", "{}"))
+    except json.JSONDecodeError:
+        return jsonify({"error": "Invalid fields JSON."}), 400
+
+    tmpdir, filepath = save_upload(request.files["file"])
+    err = apply_updates(filepath, fields)
+    if err:
         shutil.rmtree(tmpdir, ignore_errors=True)
-        return jsonify({"error": f"exiftool failed: {serr.strip()}"}), 500
+        return jsonify({"error": err}), 500
     response = send_file(filepath, as_attachment=True,
                          download_name=Path(filepath).name)
     delete_later(tmpdir)
     return response
+
+
+@app.route("/api/save_to_pc", methods=["POST"])
+def save_to_pc():
+    """Apply edited tags, save straight to Downloads, stamp Windows dates.
+
+    Returns JSON instead of a download: a browser download always stamps
+    "now" as the file's Created date, but writing the file ourselves lets
+    us stamp the date she chose, so Explorer Properties shows it.
+    """
+    err = require_exiftool()
+    if err:
+        return err
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded."}), 400
+    try:
+        fields = json.loads(request.form.get("fields", "{}"))
+    except json.JSONDecodeError:
+        return jsonify({"error": "Invalid fields JSON."}), 400
+
+    tmpdir, filepath = save_upload(request.files["file"])
+    try:
+        err = apply_updates(filepath, fields)
+        if err:
+            return jsonify({"error": err}), 500
+        # Her date always wins; a fresh file would otherwise say "now".
+        now = datetime.now().astimezone()
+        created = parse_optional_dt(fields.get("date_taken")) or now
+        dest = unique_download_path(Path(filepath).name)
+        shutil.copy2(filepath, dest)
+        stamp_err = set_windows_file_times(dest, created, created)
+        if stamp_err:
+            return jsonify({"error": stamp_err}), 500
+        return jsonify({"ok": True, "filename": os.path.basename(dest),
+                        "created": created.strftime("%Y-%m-%d %H:%M")})
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def delete_later(tmpdir, delay=30):
@@ -242,6 +295,88 @@ def delete_later(tmpdir, delay=30):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
     threading.Thread(target=_delete, daemon=True).start()
+
+
+# ----------------------------------------------------------------------------
+# "Save to PC": stamp Windows filesystem dates
+# ----------------------------------------------------------------------------
+# Explorer's Properties reads Created/Modified from the file itself, not from
+# embedded metadata — so a browser download can never carry her dates over
+# (the browser always stamps "now"). Writing the finished file to her
+# Downloads folder ourselves lets us stamp the dates she chose.
+def _dt_to_filetime(dt):
+    """datetime -> Windows FILETIME (100ns ticks since 1601-01-01 UTC)."""
+    aware = dt.astimezone() if dt.tzinfo is None else dt
+    utc = aware.astimezone(timezone.utc)
+    epoch = datetime(1601, 1, 1, tzinfo=timezone.utc)
+    ft = int((utc - epoch).total_seconds() * 10_000_000)
+    return ft
+
+
+def set_windows_file_times(path, created=None, modified=None):
+    """Stamp a file's Created / Last-modified dates (Windows only).
+
+    created/modified: datetimes (naive = this computer's local time).
+    Her date always wins: callers pass her chosen date, never the original.
+    Returns an error string, or None on success / non-Windows.
+    """
+    if os.name != "nt":
+        return None  # not Windows: nothing to stamp
+    if created is None and modified is None:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        FILE_WRITE_ATTRIBUTES = 0x100
+        OPEN_EXISTING = 3
+        h = kernel32.CreateFileW(os.fspath(path), FILE_WRITE_ATTRIBUTES, 0,
+                                 None, OPEN_EXISTING, 0, None)
+        if h == wintypes.HANDLE(-1).value:  # INVALID_HANDLE_VALUE
+            return "Could not open the file to stamp its dates."
+        try:
+            c = wintypes.FILETIME.from_buffer_copy(
+                _dt_to_filetime(created).to_bytes(8, "little")) if created else None
+            m = wintypes.FILETIME.from_buffer_copy(
+                _dt_to_filetime(modified).to_bytes(8, "little")) if modified else None
+            ok = kernel32.SetFileTime(h,
+                                      ctypes.byref(c) if c else None,
+                                      None,  # leave last-access alone
+                                      ctypes.byref(m) if m else None)
+            if not ok:
+                return "Windows refused to set the file dates."
+        finally:
+            kernel32.CloseHandle(h)
+    except Exception as e:
+        return f"Could not stamp the Windows file dates: {e}"
+    return None
+
+
+def unique_download_path(filename):
+    """A non-clobbering path inside the user's Downloads folder."""
+    downloads = os.path.join(os.path.expanduser("~"), "Downloads")
+    os.makedirs(downloads, exist_ok=True)
+    base, ext = os.path.splitext(filename)
+    candidate = os.path.join(downloads, filename)
+    n = 1
+    while os.path.exists(candidate):
+        n += 1
+        candidate = os.path.join(downloads, f"{base} ({n}){ext}")
+    return candidate
+
+
+def parse_optional_dt(raw):
+    """datetime-local-ish value -> aware local datetime, or None if empty."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(raw, fmt).astimezone()
+        except ValueError:
+            pass
+    return None
 
 
 @app.route("/api/strip", methods=["POST"])
