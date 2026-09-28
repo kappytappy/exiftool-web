@@ -21,6 +21,7 @@ it bundles Python, this app, and ExifTool: just double-click it.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -160,6 +161,11 @@ def metadata():
         for k, v in data.items():
             grp = k.split(":")[0] if ":" in k else ""
             (system_tags if grp in SYSTEM_GROUPS else tags)[k] = v
+        # Never show the tool's own version, nor the original filesystem
+        # dates (she asked that the original dates never appear anywhere).
+        for k in ("ExifTool:ExifToolVersion", "File:FileCreateDate",
+                  "File:FileModifyDate", "File:FileAccessDate"):
+            system_tags.pop(k, None)
         return jsonify({"tags": tags, "system_tags": system_tags,
                         "count": len(tags), "system_count": len(system_tags)})
     finally:
@@ -244,8 +250,10 @@ def update():
     if err:
         shutil.rmtree(tmpdir, ignore_errors=True)
         return jsonify({"error": err}), 500
+    filename = sanitize_filename(request.form.get("filename", ""),
+                                 Path(filepath).name)
     response = send_file(filepath, as_attachment=True,
-                         download_name=Path(filepath).name)
+                         download_name=filename)
     delete_later(tmpdir)
     return response
 
@@ -276,7 +284,9 @@ def save_to_pc():
         # Her date always wins; a fresh file would otherwise say "now".
         now = datetime.now().astimezone()
         created = parse_optional_dt(fields.get("date_taken")) or now
-        dest = unique_download_path(Path(filepath).name)
+        filename = sanitize_filename(request.form.get("filename", ""),
+                                     Path(filepath).name)
+        dest = unique_download_path(filename)
         shutil.copy2(filepath, dest)
         stamp_err = set_windows_file_times(dest, created, created)
         if stamp_err:
@@ -377,6 +387,18 @@ def parse_optional_dt(raw):
         except ValueError:
             pass
     return None
+
+
+def sanitize_filename(raw, default):
+    """Clean a user-typed file name: no paths, no illegal Windows chars,
+    and keep the original extension when she didn't type one."""
+    name = (raw or "").strip().replace("\\", "/").split("/")[-1].strip()
+    name = re.sub(r'[<>:"|?*\x00-\x1f]', "_", name).strip(" .")
+    if not name:
+        return default
+    if "." not in name:
+        name += os.path.splitext(default)[1]
+    return name
 
 
 @app.route("/api/strip", methods=["POST"])

@@ -214,6 +214,7 @@
         <div class="boxhead"><h2>Edit metadata</h2></div>
         <div class="boxbody">
           <div class="grid">
+            <div class="field"><label>File name</label><input id="newfilename" placeholder="photo.jpg"></div>
             <div class="field"><label>Title</label><input data-field="title" placeholder="Title"></div>
             <div class="field"><label>Description</label><input data-field="description" placeholder="Description / caption"></div>
             <div class="field"><label>Author</label><input data-field="author" placeholder="Author / artist"></div>
@@ -401,6 +402,7 @@ async function loadFile(file) {
     renderTags("");
     prefillForm();
     $("filename").textContent = file.name;
+    $("newfilename").value = file.name;
     $("filemeta").textContent = `${data.count} tags · ${(file.size / 1024).toFixed(1)} KB`;
     showPreview(file);
     $("empty").classList.add("hidden");
@@ -430,12 +432,12 @@ async function postAndDownload(endpoint, extraForm) {
     const blob = await res.blob();
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = currentFile.name;
+    a.download = (extraForm && extraForm.filename) || currentFile.name;
     document.body.appendChild(a);
     a.click();
     a.remove();
     toast("Done — your file has been downloaded.", "ok");
-    loadFile(new File([blob], currentFile.name, { type: currentFile.type }));
+    loadFile(new File([blob], a.download, { type: currentFile.type }));
   } catch (e) {
     toast("Could not reach the server.", "err");
   } finally {
@@ -462,7 +464,7 @@ $("sysToggle").addEventListener("change", e => {
 });
 $("newfile").addEventListener("click", () => fileinput.click());
 $("save").addEventListener("click", () =>
-  postAndDownload("/api/update", { fields: JSON.stringify(collectFields()) }));
+  postAndDownload("/api/update", { fields: JSON.stringify(collectFields()), filename: $("newfilename").value }));
 $("savetopc").addEventListener("click", async () => {
   if (!currentFile) return;
   setBusy(true);
@@ -470,6 +472,7 @@ $("savetopc").addEventListener("click", async () => {
   const fd = new FormData();
   fd.append("file", currentFile);
   fd.append("fields", JSON.stringify(collectFields()));
+  fd.append("filename", $("newfilename").value);
   try {
     const res = await fetch("/api/save_to_pc", { method: "POST", body: fd });
     const data = await res.json().catch(() => ({}));
